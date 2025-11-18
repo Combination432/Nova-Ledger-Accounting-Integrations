@@ -8,6 +8,7 @@ from .payout_reconstructor import PayoutReconstructionService
 from .categorization_service import AutoCategorizationService
 from .reconciliation_service import ReconciliationService
 from .currency_service import CurrencyService
+from .export_service import ExportService
 
 __all__ = [
     'ShopifyIntegrationService',
@@ -17,4 +18,5 @@ __all__ = [
     'AutoCategorizationService',
     'ReconciliationService',
     'CurrencyService',
+    'ExportService',
 ]

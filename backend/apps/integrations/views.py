@@ -2,9 +2,12 @@
 API views for integrations app.
 """
 from rest_framework import viewsets, permissions, filters, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
+from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
+from datetime import datetime
+from django.utils import timezone
 from .models import (
     Integration, SyncLog, WebhookEvent, TaxConfiguration,
     TransactionRule, BankReconciliation, ReconciliationMatch,
@@ -445,3 +448,216 @@ class ForexGainLossViewSet(viewsets.ReadOnlyModelViewSet):
         result = service.revalue_open_transactions(revaluation_date)
 
         return Response(result)
+
+
+# ============================================================================
+# Export and Reporting Endpoints
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def export_transactions(request):
+    """
+    Export transactions to CSV or Excel.
+
+    POST body:
+    {
+        "format": "csv" | "excel",
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31",
+        "platform": "shopify" (optional)
+    }
+    """
+    from apps.transactions.models import Transaction
+    from .services import ExportService
+
+    format_type = request.data.get('format', 'csv')
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    platform = request.data.get('platform')
+
+    # Build query
+    transactions = Transaction.objects.filter(
+        organization=request.user.organization
+    )
+
+    if start_date:
+        transactions = transactions.filter(transaction_date__gte=datetime.fromisoformat(start_date).date())
+    if end_date:
+        transactions = transactions.filter(transaction_date__lte=datetime.fromisoformat(end_date).date())
+    if platform:
+        transactions = transactions.filter(source_platform=platform)
+
+    transactions = transactions.order_by('transaction_date')
+
+    # Export
+    service = ExportService(request.user.organization)
+
+    if format_type == 'excel':
+        buffer, filename = service.export_transactions_excel(transactions)
+        content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    else:
+        buffer, filename = service.export_transactions_csv(transactions)
+        content_type = 'text/csv'
+
+    response = HttpResponse(buffer.getvalue(), content_type=content_type)
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def export_reconciliation_report(request):
+    """
+    Export reconciliation report to Excel.
+
+    POST body:
+    {
+        "reconciliation_id": "uuid"
+    }
+    """
+    from .services import ExportService
+
+    reconciliation_id = request.data.get('reconciliation_id')
+
+    reconciliation = BankReconciliation.objects.get(
+        id=reconciliation_id,
+        organization=request.user.organization
+    )
+
+    service = ExportService(request.user.organization)
+    buffer, filename = service.export_reconciliation_report_excel(reconciliation)
+
+    response = HttpResponse(
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def export_tax_report(request):
+    """
+    Export tax report to Excel.
+
+    POST body:
+    {
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31"
+    }
+    """
+    from .services import ExportService
+
+    start_date = datetime.fromisoformat(request.data.get('start_date')).date()
+    end_date = datetime.fromisoformat(request.data.get('end_date')).date()
+
+    service = ExportService(request.user.organization)
+    buffer, filename = service.export_tax_report_excel(start_date, end_date)
+
+    response = HttpResponse(
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def export_forex_report(request):
+    """
+    Export forex gains/losses report to Excel.
+
+    POST body:
+    {
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31"
+    }
+    """
+    from .services import ExportService
+
+    start_date = datetime.fromisoformat(request.data.get('start_date')).date()
+    end_date = datetime.fromisoformat(request.data.get('end_date')).date()
+
+    service = ExportService(request.user.organization)
+    buffer, filename = service.export_forex_report_excel(start_date, end_date)
+
+    response = HttpResponse(
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def tax_summary(request):
+    """
+    Get tax summary for a date range.
+
+    Query params:
+    - start_date: YYYY-MM-DD
+    - end_date: YYYY-MM-DD
+    """
+    from apps.transactions.models import Transaction
+    from decimal import Decimal
+
+    start_date = request.query_params.get('start_date')
+    end_date = request.query_params.get('end_date')
+
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    start_date = datetime.fromisoformat(start_date).date()
+    end_date = datetime.fromisoformat(end_date).date()
+
+    # Get tax configurations
+    tax_configs = TaxConfiguration.objects.filter(
+        organization=request.user.organization,
+        is_active=True
+    )
+
+    # Get transactions in date range
+    transactions = Transaction.objects.filter(
+        organization=request.user.organization,
+        transaction_date__gte=start_date,
+        transaction_date__lte=end_date
+    )
+
+    summary = []
+    for tax_config in tax_configs:
+        # Calculate total for this tax jurisdiction
+        # In production, you'd have more sophisticated tax calculation
+        taxable_amount = sum(
+            txn.gross_amount for txn in transactions
+            if txn.currency == 'USD'  # Simplified
+        )
+
+        tax_amount = taxable_amount * tax_config.tax_rate
+
+        summary.append({
+            'tax_name': tax_config.tax_name,
+            'tax_rate': float(tax_config.tax_rate),
+            'country': tax_config.country,
+            'state_province': tax_config.state_province,
+            'taxable_amount': float(taxable_amount),
+            'tax_collected': float(tax_amount),
+            'has_nexus': tax_config.has_nexus
+        })
+
+    return Response({
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'tax_jurisdictions': summary,
+        'total_tax_collected': sum(item['tax_collected'] for item in summary)
+    })

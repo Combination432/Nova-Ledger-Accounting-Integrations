@@ -5,7 +5,9 @@ from .views import (
     WebhookEventViewSet, TaxConfigurationViewSet,
     TransactionRuleViewSet, BankReconciliationViewSet,
     ReconciliationMatchViewSet, CurrencyViewSet,
-    ExchangeRateViewSet, ForexGainLossViewSet
+    ExchangeRateViewSet, ForexGainLossViewSet,
+    export_transactions, export_reconciliation_report,
+    export_tax_report, export_forex_report, tax_summary
 )
 
 router = DefaultRouter()
@@ -22,4 +24,9 @@ router.register(r'forex-gains-losses', ForexGainLossViewSet, basename='forexgain
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('export/transactions/', export_transactions, name='export-transactions'),
+    path('export/reconciliation/', export_reconciliation_report, name='export-reconciliation'),
+    path('export/tax/', export_tax_report, name='export-tax'),
+    path('export/forex/', export_forex_report, name='export-forex'),
+    path('tax/summary/', tax_summary, name='tax-summary'),
 ]
