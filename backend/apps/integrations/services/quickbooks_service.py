@@ -291,6 +291,120 @@ class QuickBooksIntegrationService:
 
         return True
 
+    def fetch_transactions(self, date_from: datetime, date_to: datetime):
+        """
+        Fetch transactions from QuickBooks for the sync engine.
+        Currently focused on importing journal entries.
+
+        Args:
+            date_from: Start date for fetching transactions
+            date_to: End date for fetching transactions
+
+        Returns:
+            List of raw QuickBooks journal entry dictionaries
+        """
+        logger.info(f"Fetching QuickBooks journal entries from {date_from} to {date_to}")
+
+        # Query journal entries in date range
+        from_date_str = date_from.strftime('%Y-%m-%d')
+        to_date_str = date_to.strftime('%Y-%m-%d')
+
+        query = f"SELECT * FROM JournalEntry WHERE TxnDate >= '{from_date_str}' AND TxnDate <= '{to_date_str}' MAXRESULTS 1000"
+        journal_entries = self.client.query(query)
+
+        # Convert to dictionaries
+        transactions = []
+        for je in journal_entries:
+            transactions.append(je.to_dict())
+
+        return transactions
+
+    def parse_transaction(self, platform_data: dict) -> dict:
+        """
+        Parse QuickBooks journal entry data into Nova Ledger transaction format.
+
+        Args:
+            platform_data: Raw QuickBooks journal entry dictionary
+
+        Returns:
+            Normalized transaction data with structure:
+            {
+                'transaction': {...},
+                'fees': [],
+                'line_items': []
+            }
+        """
+        # Extract journal entry details
+        entry_id = platform_data.get('Id')
+        txn_date = platform_data.get('TxnDate')
+        private_note = platform_data.get('PrivateNote', '')
+        doc_number = platform_data.get('DocNumber', '')
+
+        # Build transaction data
+        # Note: QuickBooks journal entries map to Nova Ledger journal entries,
+        # not regular transactions. This is a simplified mapping.
+        transaction_data = {
+            'external_transaction_id': f"quickbooks_je_{entry_id}",
+            'transaction_number': doc_number or f"QB-JE-{entry_id}",
+            'transaction_type': 'journal_entry',
+            'transaction_date': txn_date,
+            'description': private_note or f"QuickBooks Journal Entry {entry_id}",
+            'gross_amount': Decimal(0),  # Will be calculated from lines
+            'net_amount': Decimal(0),
+            'currency': 'USD',  # Default, could be extracted from company settings
+            'metadata': {
+                'quickbooks_id': entry_id,
+                'raw_data': platform_data
+            }
+        }
+
+        # Parse journal entry lines
+        # QuickBooks journal entries have debit/credit lines
+        line_items = []
+        lines = platform_data.get('Line', [])
+
+        total_debits = Decimal(0)
+        total_credits = Decimal(0)
+
+        for line in lines:
+            detail = line.get('JournalEntryLineDetail', {})
+            account_ref = detail.get('AccountRef', {})
+            posting_type = detail.get('PostingType', 'Debit')
+            amount = Decimal(str(line.get('Amount', 0)))
+            description = line.get('Description', '')
+
+            if posting_type == 'Debit':
+                total_debits += amount
+            else:
+                total_credits += amount
+
+            line_item_data = {
+                'product_name': f"{posting_type}: {account_ref.get('name', 'Unknown')}",
+                'description': description,
+                'quantity': Decimal(1),
+                'unit_price': amount,
+                'total_price': amount,
+                'metadata': {
+                    'posting_type': posting_type,
+                    'account_id': account_ref.get('value', ''),
+                    'account_name': account_ref.get('name', '')
+                }
+            }
+            line_items.append(line_item_data)
+
+        # Update transaction amounts
+        transaction_data['gross_amount'] = max(total_debits, total_credits)
+        transaction_data['net_amount'] = max(total_debits, total_credits)
+
+        # QuickBooks journal entries don't have fees
+        fees = []
+
+        return {
+            'transaction': transaction_data,
+            'line_items': line_items,
+            'fees': fees
+        }
+
     def test_connection(self):
         """
         Test QuickBooks connection.

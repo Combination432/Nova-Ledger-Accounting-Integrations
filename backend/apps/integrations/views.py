@@ -29,42 +29,63 @@ class IntegrationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def sync(self, request, pk=None):
-        """Trigger a sync for this integration."""
+        """
+        Trigger manual sync for this integration.
+
+        Query params:
+        - force_full_sync: (bool) If true, perform full sync instead of incremental
+        - async: (bool) If true, queue sync task and return immediately (default: false)
+        """
         integration = self.get_object()
-        sync_type = request.data.get('sync_type', 'full')
-        
-        # Import appropriate service
-        from .services import (
-            ShopifyIntegrationService,
-            StripeIntegrationService,
-            QuickBooksIntegrationService
-        )
-        
+        force_full_sync = request.data.get('force_full_sync', False)
+        async_sync = request.data.get('async', False)
+
+        if not integration.is_active:
+            return Response(
+                {'error': 'Integration is not active'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         try:
-            if integration.integration_type == 'shopify':
-                service = ShopifyIntegrationService(integration)
-                if sync_type == 'orders':
-                    result = service.sync_orders()
-                elif sync_type == 'inventory':
-                    result = service.sync_inventory()
-                else:
-                    result = service.sync_orders()
-                    
-            elif integration.integration_type == 'stripe':
-                service = StripeIntegrationService(integration)
-                result = service.sync_charges()
-                
-            elif integration.integration_type == 'quickbooks_online':
-                service = QuickBooksIntegrationService(integration)
-                result = service.sync_chart_of_accounts()
+            if async_sync:
+                # Queue the sync task
+                from .tasks import sync_integration_transactions
+                task = sync_integration_transactions.delay(str(integration.id), force_full_sync)
+
+                return Response({
+                    'status': 'queued',
+                    'task_id': task.id,
+                    'message': 'Sync task queued successfully'
+                }, status=status.HTTP_202_ACCEPTED)
             else:
-                return Response(
-                    {'error': 'Integration type not supported for sync'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            return Response(SyncLogSerializer(result).data)
-            
+                # Run sync synchronously
+                from .sync_engine import SyncEngine
+                engine = SyncEngine(integration)
+                result = engine.sync_transactions(force_full_sync=force_full_sync)
+
+                return Response(result, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'])
+    def sync_status(self, request, pk=None):
+        """
+        Get current sync status for this integration.
+        Returns information about last sync, next scheduled sync, and statistics.
+        """
+        integration = self.get_object()
+
+        try:
+            from .sync_engine import SyncEngine
+            engine = SyncEngine(integration)
+            status_info = engine.get_sync_status()
+
+            return Response(status_info, status=status.HTTP_200_OK)
+
         except Exception as e:
             return Response(
                 {'error': str(e)},

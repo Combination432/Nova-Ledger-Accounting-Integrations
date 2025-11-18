@@ -258,6 +258,111 @@ class ShopifyIntegrationService:
             sync_log.save()
             raise
 
+    def fetch_transactions(self, date_from: datetime, date_to: datetime):
+        """
+        Fetch transactions from Shopify for the sync engine.
+
+        Args:
+            date_from: Start date for fetching transactions
+            date_to: End date for fetching transactions
+
+        Returns:
+            List of raw Shopify order dictionaries
+        """
+        logger.info(f"Fetching Shopify orders from {date_from} to {date_to}")
+
+        # Fetch orders from Shopify
+        orders = shopify.Order.find(
+            status='any',
+            created_at_min=date_from.isoformat(),
+            created_at_max=date_to.isoformat(),
+            limit=250
+        )
+
+        # Convert to dictionaries
+        return [order.to_dict() for order in orders]
+
+    def parse_transaction(self, platform_data: dict) -> dict:
+        """
+        Parse Shopify order data into Nova Ledger transaction format.
+
+        Args:
+            platform_data: Raw Shopify order dictionary
+
+        Returns:
+            Normalized transaction data with structure:
+            {
+                'transaction': {...},
+                'fees': [...],
+                'line_items': [...]
+            }
+        """
+        # Extract order details
+        order_id = platform_data.get('id')
+        order_number = platform_data.get('order_number')
+        created_at = platform_data.get('created_at')
+        total_price = platform_data.get('total_price')
+        currency = platform_data.get('currency', 'USD')
+
+        # Customer details
+        customer = platform_data.get('customer', {})
+        customer_name = f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip()
+        customer_email = customer.get('email', '')
+        customer_id = str(customer.get('id', ''))
+
+        # Build transaction data
+        transaction_data = {
+            'external_transaction_id': f"shopify_order_{order_id}",
+            'transaction_number': f"SH-{order_number}",
+            'transaction_type': 'sale',
+            'transaction_date': created_at,
+            'description': f"Shopify Order #{order_number}",
+            'gross_amount': Decimal(str(total_price)),
+            'net_amount': Decimal(str(total_price)),
+            'currency': currency,
+            'customer_name': customer_name,
+            'customer_email': customer_email,
+            'customer_id': customer_id,
+            'metadata': {
+                'status': platform_data.get('financial_status'),
+                'fulfillment_status': platform_data.get('fulfillment_status'),
+                'raw_data': platform_data
+            }
+        }
+
+        # Parse line items
+        line_items = []
+        for item in platform_data.get('line_items', []):
+            line_item_data = {
+                'product_id': str(item.get('product_id', '')),
+                'product_name': item.get('name', ''),
+                'sku': item.get('sku', ''),
+                'variant_id': str(item.get('variant_id', '')),
+                'quantity': Decimal(str(item.get('quantity', 0))),
+                'unit_price': Decimal(str(item.get('price', 0))),
+                'total_price': Decimal(str(item.get('price', 0))) * Decimal(str(item.get('quantity', 0))),
+                'discount_amount': Decimal(str(item.get('total_discount', 0))),
+                'tax_amount': Decimal(str(sum(tax.get('price', 0) for tax in item.get('tax_lines', [])))),
+            }
+            line_items.append(line_item_data)
+
+        # Parse fees (shipping)
+        fees = []
+        shipping_lines = platform_data.get('shipping_lines', [])
+        for shipping in shipping_lines:
+            fee_data = {
+                'fee_type': 'shipping_fee',
+                'fee_name': shipping.get('title', 'Shopify Shipping'),
+                'amount': Decimal(str(shipping.get('price', 0))),
+            }
+            fees.append(fee_data)
+
+        return {
+            'transaction': transaction_data,
+            'line_items': line_items,
+            'fees': fees
+        }
+
     def __del__(self):
         """Clean up Shopify session."""
         try:

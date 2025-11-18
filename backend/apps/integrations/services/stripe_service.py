@@ -313,3 +313,131 @@ class StripeIntegrationService:
             reconstruction['components'].append(component)
 
         return reconstruction
+
+    def fetch_transactions(self, date_from: datetime, date_to: datetime):
+        """
+        Fetch transactions from Stripe for the sync engine.
+
+        Args:
+            date_from: Start date for fetching transactions
+            date_to: End date for fetching transactions
+
+        Returns:
+            List of raw Stripe charge dictionaries
+        """
+        logger.info(f"Fetching Stripe charges from {date_from} to {date_to}")
+
+        # Convert to Unix timestamps
+        created_gte = int(date_from.timestamp())
+        created_lte = int(date_to.timestamp())
+
+        # Fetch charges from Stripe
+        charges = stripe.Charge.list(
+            limit=100,
+            created={'gte': created_gte, 'lte': created_lte}
+        )
+
+        # Convert to dictionaries
+        transactions = []
+        for charge in charges.auto_paging_iter():
+            transactions.append(charge.to_dict())
+
+        return transactions
+
+    def parse_transaction(self, platform_data: dict) -> dict:
+        """
+        Parse Stripe charge data into Nova Ledger transaction format.
+
+        Args:
+            platform_data: Raw Stripe charge dictionary
+
+        Returns:
+            Normalized transaction data with structure:
+            {
+                'transaction': {...},
+                'fees': [...],
+                'line_items': []
+            }
+        """
+        # Extract charge details
+        charge_id = platform_data.get('id')
+        created = platform_data.get('created')
+        amount = platform_data.get('amount', 0)
+        currency = platform_data.get('currency', 'usd').upper()
+        refunded = platform_data.get('refunded', False)
+        description = platform_data.get('description', '')
+
+        # Balance transaction for fee details
+        balance_transaction = platform_data.get('balance_transaction')
+
+        # Customer/billing details
+        billing_details = platform_data.get('billing_details', {})
+        customer_name = billing_details.get('name', '')
+        customer_email = billing_details.get('email', '')
+        customer_id = platform_data.get('customer', '')
+
+        # Calculate amounts (Stripe amounts are in cents)
+        gross_amount = Decimal(amount) / 100
+
+        # Get fee and net from balance transaction if available
+        if isinstance(balance_transaction, dict):
+            fee_amount = Decimal(balance_transaction.get('fee', 0)) / 100
+            net_amount = Decimal(balance_transaction.get('net', amount)) / 100
+        else:
+            fee_amount = Decimal(0)
+            net_amount = gross_amount
+
+        # Build transaction data
+        transaction_data = {
+            'external_transaction_id': f"stripe_charge_{charge_id}",
+            'transaction_number': f"STRIPE-{charge_id[-8:]}",
+            'transaction_type': 'refund' if refunded else 'payment',
+            'transaction_date': datetime.fromtimestamp(created, tz=timezone.utc),
+            'description': description or f"Stripe Charge {charge_id}",
+            'gross_amount': gross_amount,
+            'net_amount': net_amount,
+            'currency': currency,
+            'customer_name': customer_name,
+            'customer_email': customer_email,
+            'customer_id': customer_id,
+            'metadata': {
+                'status': platform_data.get('status'),
+                'paid': platform_data.get('paid'),
+                'refunded': refunded,
+                'raw_data': platform_data
+            }
+        }
+
+        # Parse fees
+        fees = []
+        if isinstance(balance_transaction, dict):
+            fee_details = balance_transaction.get('fee_details', [])
+            for fee_detail in fee_details:
+                fee_type = fee_detail.get('type', 'stripe_fee')
+                fee_amount_cents = fee_detail.get('amount', 0)
+                fee_description = fee_detail.get('description', '')
+
+                # Map Stripe fee types to Nova Ledger fee types
+                fee_type_mapping = {
+                    'stripe_fee': 'payment_processing',
+                    'application_fee': 'platform_fee',
+                    'tax': 'transaction_fee',
+                }
+                nova_fee_type = fee_type_mapping.get(fee_type, 'other')
+
+                fee_data = {
+                    'fee_type': nova_fee_type,
+                    'fee_name': fee_description or f"Stripe {fee_type}",
+                    'amount': Decimal(fee_amount_cents) / 100,
+                    'description': f"Stripe fee: {fee_description}"
+                }
+                fees.append(fee_data)
+
+        # Stripe charges don't have line items by default
+        line_items = []
+
+        return {
+            'transaction': transaction_data,
+            'line_items': line_items,
+            'fees': fees
+        }
