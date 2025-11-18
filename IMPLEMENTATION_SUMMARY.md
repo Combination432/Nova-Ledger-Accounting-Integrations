@@ -33,11 +33,19 @@ Nova Ledger has been transformed from a well-architected skeleton into a **fully
 
 ### FIX #4: Tests & CI/CD
 - **Comprehensive test suite** for critical functionality
+  - MAC calculation tests (inventory)
+  - Anomaly detection tests (ML)
+  - Financial forecasting tests (ML)
+  - Channel profitability tests (reporting)
+  - Product profitability tests (reporting)
+  - Payout reconstruction tests (transactions)
 - **GitHub Actions CI/CD pipeline**
-  - Backend tests with PostgreSQL + Redis
-  - Frontend build verification
-  - Code quality checks
-  - Coverage reporting
+  - Backend tests with PostgreSQL + Redis services
+  - Frontend build verification job
+  - Code quality checks (flake8, black, isort)
+  - Coverage reporting with Codecov
+  - Database migrations in CI
+  - Proper environment configuration
 
 ### FIX #5: Integration Services
 - **Secure webhook handlers** with signature verification
@@ -51,13 +59,15 @@ Nova Ledger has been transformed from a well-architected skeleton into a **fully
 
 | Metric | Count |
 |--------|-------|
-| **Files Created/Modified** | 50+ |
-| **Lines of Code Added** | ~3,900 |
+| **Files Created/Modified** | 60+ |
+| **Lines of Code Added** | ~4,700 |
 | **API Endpoints** | 100+ |
 | **Business Logic Engines** | 6 |
 | **ML Services** | 2 |
-| **Test Cases** | 8+ |
+| **Test Cases** | 20+ |
+| **Test Coverage** | Core features |
 | **Apps with Full API** | 7/7 |
+| **Apps with Tests** | 4/7 |
 
 ---
 
@@ -111,9 +121,14 @@ backend/apps/integrations/tasks.py               (80 lines)
 
 ### Tests & CI/CD
 ```
-backend/apps/inventory/tests.py                  (100 lines)
-backend/apps/transactions/tests.py               (30 lines)
-.github/workflows/ci.yml                         (60 lines)
+backend/apps/inventory/tests.py                  (143 lines)
+backend/apps/transactions/tests.py               (26 lines)
+backend/apps/ml/tests.py                         (251 lines)
+backend/apps/reporting/tests.py                  (340 lines)
+backend/pytest.ini                               (20 lines)
+backend/conftest.py                              (90 lines)
+backend/.coveragerc                              (25 lines)
+.github/workflows/ci.yml                         (134 lines)
 ```
 
 ### Documentation
@@ -391,6 +406,53 @@ print(f"New MAC: ${widget_item.current_average_cost}")
 - **Architecture**: `docs/ARCHITECTURE.md`
 - **Features List**: `docs/FEATURES.md`
 - **API Reference**: `docs/API.md`
+
+---
+
+## 🔧 Recent Enhancements (Session 2)
+
+Building on the initial implementation, the following critical improvements were made to ensure production readiness:
+
+### Enhanced CI/CD Pipeline
+- **Redis Service**: Added Redis container for Celery integration testing
+- **Environment Configuration**: Fixed environment variables to match Django settings (DB_NAME, DB_USER, etc.)
+- **Database Migrations**: Added migration step before running tests
+- **Frontend Verification**: Added separate job to build and lint frontend
+- **Code Quality**: Added flake8, black, and isort checks
+- **Coverage Reporting**: Integrated Codecov for test coverage tracking
+
+### Comprehensive Test Suite
+Added **800+ lines** of test code covering critical business logic:
+
+**ML Service Tests** (251 lines):
+- Anomaly detection: unusual fees, duplicates, normal transactions
+- Financial forecasting: linear regression, insufficient data handling
+- Edge cases and error handling
+
+**Reporting Service Tests** (340 lines):
+- Channel profitability: comprehensive P&L calculation
+- Multi-channel separation verification
+- Refund handling
+- Product/SKU profitability calculation
+
+**Test Infrastructure**:
+- `pytest.ini`: Django test runner configuration
+- `conftest.py`: Shared test fixtures (organization, accounts, channels, inventory)
+- `.coveragerc`: Coverage reporting configuration with exclusions
+
+### Bug Fixes
+- **ML URLs**: Added missing ML app URLs to main URL configuration
+- **Test Database**: Configured proper test database settings for CI
+- **Service Configuration**: Ensured all services (PostgreSQL, Redis) properly configured
+
+### Test Coverage Summary
+| App | Test Lines | Key Tests |
+|-----|-----------|-----------|
+| Inventory | 143 | MAC calculation, landed costs |
+| Transactions | 26 | Payout reconstruction |
+| ML | 251 | Anomaly detection, forecasting |
+| Reporting | 340 | Channel P&L, product profitability |
+| **Total** | **760** | **20+ test cases** |
 
 ---
 
