@@ -1283,3 +1283,263 @@ def register_webhooks(request):
             {'error': f'Webhook registration failed: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# Advanced tax reporting endpoints
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sales_tax_summary(request):
+    """
+    Get sales tax summary by jurisdiction.
+    
+    Query params:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - jurisdiction: Optional jurisdiction filter
+    """
+    from .services.tax_service import TaxService
+    from datetime import datetime
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    jurisdiction = request.GET.get('jurisdiction')
+    
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        tax_service = TaxService(request.user.organization)
+        summary = tax_service.calculate_sales_tax_summary(start, end, jurisdiction)
+        
+        return Response(summary)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid date format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def vat_summary(request):
+    """
+    Get VAT summary with input/output VAT.
+    
+    Query params:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - vat_scheme: VAT scheme (standard, flat_rate, cash_accounting)
+    """
+    from .services.tax_service import TaxService
+    from datetime import datetime
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    vat_scheme = request.GET.get('vat_scheme', 'standard')
+    
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        tax_service = TaxService(request.user.organization)
+        summary = tax_service.calculate_vat_summary(start, end, vat_scheme)
+        
+        return Response(summary)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid date format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def form_1099_report(request):
+    """
+    Generate 1099 report for vendors.
+    
+    Query params:
+    - tax_year: Tax year (e.g., 2024)
+    - form_type: Form type (1099-NEC, 1099-MISC, 1099-K)
+    """
+    from .services.tax_service import TaxService
+    
+    tax_year = request.GET.get('tax_year')
+    form_type = request.GET.get('form_type', '1099-NEC')
+    
+    if not tax_year:
+        return Response(
+            {'error': 'tax_year is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        year = int(tax_year)
+        
+        tax_service = TaxService(request.user.organization)
+        report = tax_service.generate_1099_report(year, form_type)
+        
+        return Response(report)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid tax_year: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def nexus_analysis(request):
+    """
+    Analyze sales tax nexus by state.
+    
+    Query params:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    """
+    from .services.tax_service import TaxService
+    from datetime import datetime
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        tax_service = TaxService(request.user.organization)
+        analysis = tax_service.calculate_nexus_by_state(start, end)
+        
+        return Response(analysis)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid date format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def quarterly_estimated_tax(request):
+    """
+    Calculate quarterly estimated tax payment.
+    
+    Query params:
+    - year: Tax year (e.g., 2024)
+    - quarter: Quarter (1-4)
+    """
+    from .services.tax_service import TaxService
+    
+    year = request.GET.get('year')
+    quarter = request.GET.get('quarter')
+    
+    if not year or not quarter:
+        return Response(
+            {'error': 'year and quarter are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        year_int = int(year)
+        quarter_int = int(quarter)
+        
+        if quarter_int not in [1, 2, 3, 4]:
+            raise ValueError("Quarter must be 1-4")
+        
+        tax_service = TaxService(request.user.organization)
+        calculation = tax_service.calculate_quarterly_estimated_tax(year_int, quarter_int)
+        
+        return Response(calculation)
+        
+    except ValueError as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def tax_compliance_checklist(request):
+    """
+    Get tax compliance checklist for the year.
+    
+    Query params:
+    - year: Tax year (e.g., 2024)
+    """
+    from .services.tax_service import TaxService
+    
+    year = request.GET.get('year')
+    
+    if not year:
+        return Response(
+            {'error': 'year is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        year_int = int(year)
+        
+        tax_service = TaxService(request.user.organization)
+        checklist = tax_service.get_tax_compliance_checklist(year_int)
+        
+        return Response(checklist)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid year: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

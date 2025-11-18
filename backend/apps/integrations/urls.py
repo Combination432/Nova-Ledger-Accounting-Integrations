@@ -9,7 +9,9 @@ from .views import (
     export_transactions, export_reconciliation_report,
     export_tax_report, export_forex_report, tax_summary,
     oauth_initiate, oauth_callback, oauth_disconnect, oauth_refresh,
-    shopify_webhook, stripe_webhook, quickbooks_webhook, register_webhooks
+    shopify_webhook, stripe_webhook, quickbooks_webhook, register_webhooks,
+    sales_tax_summary, vat_summary, form_1099_report, nexus_analysis,
+    quarterly_estimated_tax, tax_compliance_checklist
 )
 
 router = DefaultRouter()
@@ -39,4 +41,10 @@ urlpatterns = [
     path('webhooks/stripe/', stripe_webhook, name='webhook-stripe'),
     path('webhooks/quickbooks/', quickbooks_webhook, name='webhook-quickbooks'),
     path('webhooks/register/', register_webhooks, name='webhook-register'),
+    path('tax/sales-tax/', sales_tax_summary, name='tax-sales-tax'),
+    path('tax/vat/', vat_summary, name='tax-vat'),
+    path('tax/1099/', form_1099_report, name='tax-1099'),
+    path('tax/nexus/', nexus_analysis, name='tax-nexus'),
+    path('tax/estimated/', quarterly_estimated_tax, name='tax-estimated'),
+    path('tax/checklist/', tax_compliance_checklist, name='tax-checklist'),
 ]

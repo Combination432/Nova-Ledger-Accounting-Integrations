@@ -11,6 +11,7 @@ from .currency_service import CurrencyService
 from .export_service import ExportService
 from .oauth_service import OAuthService
 from .webhook_service import WebhookService
+from .tax_service import TaxService
 
 __all__ = [
     'ShopifyIntegrationService',
@@ -23,4 +24,5 @@ __all__ = [
     'ExportService',
     'OAuthService',
     'WebhookService',
+    'TaxService',
 ]
