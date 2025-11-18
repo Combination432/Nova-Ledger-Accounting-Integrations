@@ -8,7 +8,8 @@ from .views import (
     ExchangeRateViewSet, ForexGainLossViewSet,
     export_transactions, export_reconciliation_report,
     export_tax_report, export_forex_report, tax_summary,
-    oauth_initiate, oauth_callback, oauth_disconnect, oauth_refresh
+    oauth_initiate, oauth_callback, oauth_disconnect, oauth_refresh,
+    shopify_webhook, stripe_webhook, quickbooks_webhook, register_webhooks
 )
 
 router = DefaultRouter()
@@ -34,4 +35,8 @@ urlpatterns = [
     path('oauth/callback/', oauth_callback, name='oauth-callback'),
     path('oauth/disconnect/', oauth_disconnect, name='oauth-disconnect'),
     path('oauth/refresh/', oauth_refresh, name='oauth-refresh'),
+    path('webhooks/shopify/', shopify_webhook, name='webhook-shopify'),
+    path('webhooks/stripe/', stripe_webhook, name='webhook-stripe'),
+    path('webhooks/quickbooks/', quickbooks_webhook, name='webhook-quickbooks'),
+    path('webhooks/register/', register_webhooks, name='webhook-register'),
 ]

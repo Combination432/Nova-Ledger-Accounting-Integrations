@@ -973,3 +973,313 @@ def oauth_refresh(request):
             {'error': f'Token refresh failed: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# Webhook handler endpoints
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])  # Public endpoint
+def shopify_webhook(request):
+    """
+    Handle incoming Shopify webhooks.
+    
+    Headers:
+    - X-Shopify-Hmac-SHA256: Webhook signature
+    - X-Shopify-Shop-Domain: Shop domain
+    - X-Shopify-Topic: Event topic
+    """
+    from .services.webhook_service import WebhookService
+    import json
+    
+    # Get headers
+    signature = request.META.get('HTTP_X_SHOPIFY_HMAC_SHA256')
+    shop_domain = request.META.get('HTTP_X_SHOPIFY_SHOP_DOMAIN')
+    event_type = request.META.get('HTTP_X_SHOPIFY_TOPIC')
+    
+    if not signature or not shop_domain or not event_type:
+        return Response(
+            {'error': 'Missing required headers'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Find integration by shop domain
+    try:
+        integration = Integration.objects.get(
+            integration_type='shopify',
+            auth_credentials__shop__icontains=shop_domain.replace('.myshopify.com', ''),
+            is_active=True
+        )
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Get webhook secret
+    webhook_secret = integration.settings.get('webhook_secret', '')
+    
+    if not webhook_secret:
+        logger.warning(f"No webhook secret configured for integration {integration.id}")
+        # Continue anyway for development
+    
+    # Verify signature
+    webhook_service = WebhookService('shopify')
+    payload = request.body
+    
+    if webhook_secret:
+        is_valid = webhook_service.verify_signature(
+            payload=payload,
+            signature=signature,
+            secret=webhook_secret
+        )
+        
+        if not is_valid:
+            logger.error(f"Invalid Shopify webhook signature from {shop_domain}")
+            return Response(
+                {'error': 'Invalid signature'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    
+    # Process webhook
+    try:
+        payload_data = json.loads(payload.decode('utf-8'))
+        event_id = payload_data.get('id', '')
+        
+        webhook_event = webhook_service.process_webhook(
+            integration=integration,
+            event_type=event_type,
+            payload=payload_data,
+            event_id=str(event_id)
+        )
+        
+        return Response({'status': 'received', 'event_id': str(webhook_event.id)})
+        
+    except Exception as e:
+        logger.error(f"Failed to process Shopify webhook: {str(e)}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])  # Public endpoint
+def stripe_webhook(request):
+    """
+    Handle incoming Stripe webhooks.
+    
+    Headers:
+    - Stripe-Signature: Webhook signature with timestamp
+    """
+    from .services.webhook_service import WebhookService
+    import json
+    
+    signature = request.META.get('HTTP_STRIPE_SIGNATURE')
+    
+    if not signature:
+        return Response(
+            {'error': 'Missing Stripe-Signature header'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    payload = request.body
+    
+    try:
+        payload_data = json.loads(payload.decode('utf-8'))
+        event_type = payload_data.get('type')
+        event_id = payload_data.get('id')
+        
+        # Get account ID from payload
+        account_id = payload_data.get('account')
+        
+        if not account_id:
+            # For direct integrations (not Connect)
+            # Try to find by organization
+            logger.warning("No account ID in Stripe webhook, using first active integration")
+            integration = Integration.objects.filter(
+                integration_type='stripe',
+                is_active=True
+            ).first()
+        else:
+            # Find integration by Stripe account ID
+            integration = Integration.objects.filter(
+                integration_type='stripe',
+                auth_credentials__stripe_user_id=account_id,
+                is_active=True
+            ).first()
+        
+        if not integration:
+            return Response(
+                {'error': 'Integration not found for this account'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get webhook secret (endpoint secret from Stripe)
+        webhook_secret = integration.settings.get('webhook_secret', '')
+        
+        # Verify signature
+        webhook_service = WebhookService('stripe')
+        
+        if webhook_secret:
+            is_valid = webhook_service.verify_signature(
+                payload=payload,
+                signature=signature,
+                secret=webhook_secret,
+                headers=request.META
+            )
+            
+            if not is_valid:
+                logger.error(f"Invalid Stripe webhook signature for integration {integration.id}")
+                return Response(
+                    {'error': 'Invalid signature'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+        
+        # Process webhook
+        webhook_event = webhook_service.process_webhook(
+            integration=integration,
+            event_type=event_type,
+            payload=payload_data,
+            event_id=event_id
+        )
+        
+        return Response({'status': 'received', 'event_id': str(webhook_event.id)})
+        
+    except Exception as e:
+        logger.error(f"Failed to process Stripe webhook: {str(e)}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])  # Public endpoint
+def quickbooks_webhook(request):
+    """
+    Handle incoming QuickBooks webhooks.
+    
+    Headers:
+    - intuit-signature: Webhook signature
+    """
+    from .services.webhook_service import WebhookService
+    import json
+    
+    signature = request.META.get('HTTP_INTUIT_SIGNATURE')
+    
+    if not signature:
+        return Response(
+            {'error': 'Missing intuit-signature header'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    payload = request.body
+    
+    try:
+        payload_data = json.loads(payload.decode('utf-8'))
+        
+        # QuickBooks sends batch of notifications
+        notifications = payload_data.get('eventNotifications', [])
+        
+        if not notifications:
+            return Response({'status': 'no_events'})
+        
+        # Get realm ID from first notification
+        realm_id = notifications[0].get('realmId')
+        
+        # Find integration by realm ID
+        integration = Integration.objects.filter(
+            integration_type='quickbooks',
+            auth_credentials__realm_id=realm_id,
+            is_active=True
+        ).first()
+        
+        if not integration:
+            return Response(
+                {'error': 'Integration not found for this realm'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get webhook secret (verifier token)
+        webhook_secret = integration.settings.get('webhook_secret', '')
+        
+        # Verify signature
+        webhook_service = WebhookService('quickbooks')
+        
+        if webhook_secret:
+            is_valid = webhook_service.verify_signature(
+                payload=payload,
+                signature=signature,
+                secret=webhook_secret,
+                headers=request.META
+            )
+            
+            if not is_valid:
+                logger.error(f"Invalid QuickBooks webhook signature for integration {integration.id}")
+                return Response(
+                    {'error': 'Invalid signature'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+        
+        # Process webhook
+        # QuickBooks sends multiple entities in one webhook
+        event_type = 'data_change'
+        event_id = f"qb_{realm_id}_{timezone.now().timestamp()}"
+        
+        webhook_event = webhook_service.process_webhook(
+            integration=integration,
+            event_type=event_type,
+            payload=payload_data,
+            event_id=event_id
+        )
+        
+        return Response({'status': 'received', 'event_id': str(webhook_event.id)})
+        
+    except Exception as e:
+        logger.error(f"Failed to process QuickBooks webhook: {str(e)}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def register_webhooks(request):
+    """
+    Register webhooks with a platform.
+    
+    Body params:
+    - integration_id: Integration ID
+    """
+    from .services.webhook_service import WebhookService
+    
+    integration_id = request.data.get('integration_id')
+    
+    if not integration_id:
+        return Response(
+            {'error': 'integration_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        integration = Integration.objects.get(
+            id=integration_id,
+            organization=request.user.organization
+        )
+        
+        webhook_service = WebhookService(integration.integration_type)
+        result = webhook_service.register_webhooks(integration)
+        
+        return Response(result)
+        
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'Webhook registration failed: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

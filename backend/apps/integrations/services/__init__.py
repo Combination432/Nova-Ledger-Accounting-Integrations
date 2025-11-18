@@ -10,6 +10,7 @@ from .reconciliation_service import ReconciliationService
 from .currency_service import CurrencyService
 from .export_service import ExportService
 from .oauth_service import OAuthService
+from .webhook_service import WebhookService
 
 __all__ = [
     'ShopifyIntegrationService',
@@ -21,4 +22,5 @@ __all__ = [
     'CurrencyService',
     'ExportService',
     'OAuthService',
+    'WebhookService',
 ]
