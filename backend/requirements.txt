@@ -1,0 +1,56 @@
+# Core Django
+Django==5.0.1
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+django-filter==23.5
+djangorestframework-simplejwt==5.3.1
+
+# Database
+psycopg2-binary==2.9.9
+timescaledb==0.13.2
+
+# Async & Background Tasks
+celery==5.3.6
+redis==5.0.1
+django-celery-beat==2.5.0
+kafka-python==2.0.2
+
+# API & Documentation
+drf-spectacular==0.27.1
+drf-yasg==1.21.7
+
+# Integration SDKs
+stripe==8.0.0
+shopify-python-api==12.4.0
+python-quickbooks==0.9.5
+xero-python==5.2.0
+boto3==1.34.34
+paypalrestsdk==1.13.1
+
+# ML/AI
+tensorflow==2.15.0
+scikit-learn==1.4.0
+pandas==2.2.0
+numpy==1.26.3
+
+# Security & Auth
+cryptography==42.0.2
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+
+# Utilities
+python-dotenv==1.0.1
+requests==2.31.0
+python-dateutil==2.8.2
+pytz==2024.1
+
+# Monitoring & Logging
+sentry-sdk==1.40.0
+python-json-logger==2.0.7
+
+# Testing
+pytest==7.4.4
+pytest-django==4.7.0
+pytest-cov==4.1.0
+factory-boy==3.3.0
+faker==22.5.0
