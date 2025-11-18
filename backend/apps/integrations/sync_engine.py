@@ -13,7 +13,8 @@ from .models import Integration, SyncLog, WebhookEvent
 from .services import (
     ShopifyIntegrationService,
     StripeIntegrationService,
-    QuickBooksIntegrationService
+    QuickBooksIntegrationService,
+    AutoCategorizationService
 )
 from apps.transactions.models import Transaction
 import logging
@@ -272,6 +273,14 @@ class SyncEngine:
             TransactionLineItem.objects.create(transaction=txn, **item_data)
 
         logger.info(f"Created transaction {txn.id} from {self.integration.integration_type}")
+
+        # Auto-categorize if enabled
+        if self.integration.settings.get('auto_categorize', True):
+            try:
+                categorization_service = AutoCategorizationService(self.organization)
+                categorization_service.categorize_transaction(txn)
+            except Exception as e:
+                logger.warning(f"Auto-categorization failed for transaction {txn.id}: {str(e)}")
 
         return txn
 
