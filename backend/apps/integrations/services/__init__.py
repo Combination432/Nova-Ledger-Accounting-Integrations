@@ -12,6 +12,13 @@ from .export_service import ExportService
 from .oauth_service import OAuthService
 from .webhook_service import WebhookService
 from .tax_service import TaxService
+from .journal_entry_service import JournalEntryService
+from .historical_import_service import HistoricalImportService
+from .batch_operations_service import BatchOperationsService
+from .audit_trail_service import AuditTrailService
+from .report_builder_service import ReportBuilderService
+from .analytics_service import AnalyticsService
+from .scheduled_reports_service import ScheduledReportsService
 
 __all__ = [
     'ShopifyIntegrationService',
@@ -25,4 +32,11 @@ __all__ = [
     'OAuthService',
     'WebhookService',
     'TaxService',
+    'JournalEntryService',
+    'HistoricalImportService',
+    'BatchOperationsService',
+    'AuditTrailService',
+    'ReportBuilderService',
+    'AnalyticsService',
+    'ScheduledReportsService',
 ]

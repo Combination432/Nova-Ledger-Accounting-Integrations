@@ -1543,3 +1543,399 @@ def tax_compliance_checklist(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# Journal entry generation endpoints
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def generate_journal_entry(request):
+    """
+    Generate journal entry for a transaction.
+    
+    Body params:
+    - transaction_id: Transaction ID
+    - accounting_method: 'accrual' or 'cash' (default: 'accrual')
+    """
+    from .services.journal_entry_service import JournalEntryService
+    
+    transaction_id = request.data.get('transaction_id')
+    accounting_method = request.data.get('accounting_method', 'accrual')
+    
+    if not transaction_id:
+        return Response(
+            {'error': 'transaction_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        from apps.transactions.models import Transaction
+        transaction = Transaction.objects.get(
+            id=transaction_id,
+            organization=request.user.organization
+        )
+        
+        journal_service = JournalEntryService(request.user.organization)
+        journal_entry = journal_service.generate_journal_entry(transaction, accounting_method)
+        
+        return Response(journal_entry)
+        
+    except Transaction.DoesNotExist:
+        return Response(
+            {'error': 'Transaction not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def batch_generate_journal_entries(request):
+    """
+    Generate journal entries for all transactions in a date range.
+    
+    Body params:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - accounting_method: 'accrual' or 'cash' (default: 'accrual')
+    """
+    from .services.journal_entry_service import JournalEntryService
+    from datetime import datetime
+    
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    accounting_method = request.data.get('accounting_method', 'accrual')
+    
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        journal_service = JournalEntryService(request.user.organization)
+        results = journal_service.batch_generate_journal_entries(start, end, accounting_method)
+        
+        return Response(results)
+        
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid date format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Historical import endpoints
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def import_historical_data(request):
+    """
+    Import historical data from platform.
+    
+    Body params:
+    - integration_id: Integration ID
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    - batch_size: Batch size (default: 100)
+    """
+    from .services.historical_import_service import HistoricalImportService
+    from datetime import datetime
+    
+    integration_id = request.data.get('integration_id')
+    start_date = request.data.get('start_date')
+    end_date = request.data.get('end_date')
+    batch_size = request.data.get('batch_size', 100)
+    
+    if not all([integration_id, start_date, end_date]):
+        return Response(
+            {'error': 'integration_id, start_date, and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        integration = Integration.objects.get(
+            id=integration_id,
+            organization=request.user.organization
+        )
+        
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        import_service = HistoricalImportService(integration)
+        results = import_service.import_historical_from_platform(start, end, batch_size)
+        
+        return Response(results)
+        
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def import_from_csv(request):
+    """
+    Import transactions from CSV file.
+    
+    Form data:
+    - file: CSV file
+    - field_mapping: Optional JSON field mapping
+    """
+    from .services.historical_import_service import HistoricalImportService
+    import json
+    
+    if 'file' not in request.FILES:
+        return Response(
+            {'error': 'No file provided'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    csv_file = request.FILES['file']
+    field_mapping = request.data.get('field_mapping')
+    
+    if field_mapping:
+        try:
+            field_mapping = json.loads(field_mapping)
+        except json.JSONDecodeError:
+            return Response(
+                {'error': 'Invalid field_mapping JSON'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    # Create a temporary integration for CSV imports
+    integration, _ = Integration.objects.get_or_create(
+        organization=request.user.organization,
+        integration_type='csv_import',
+        defaults={'name': 'CSV Import', 'is_active': True}
+    )
+    
+    try:
+        import_service = HistoricalImportService(integration)
+        results = import_service.import_from_csv(csv_file, field_mapping)
+        
+        return Response(results)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Batch operations endpoints
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def batch_categorize(request):
+    """
+    Categorize multiple transactions.
+    
+    Body params:
+    - transaction_ids: List of transaction IDs
+    - account_id: Chart of accounts ID
+    """
+    from .services.batch_operations_service import BatchOperationsService
+    
+    transaction_ids = request.data.get('transaction_ids', [])
+    account_id = request.data.get('account_id')
+    
+    if not transaction_ids or not account_id:
+        return Response(
+            {'error': 'transaction_ids and account_id are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        batch_service = BatchOperationsService(request.user.organization)
+        results = batch_service.batch_categorize(transaction_ids, account_id)
+        
+        return Response(results)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def batch_operations(request):
+    """
+    Execute batch operations on transactions.
+    
+    Body params:
+    - operation: Operation type (categorize, tag, update, delete, approve, apply_rule)
+    - transaction_ids: List of transaction IDs
+    - parameters: Operation-specific parameters
+    """
+    from .services.batch_operations_service import BatchOperationsService
+    
+    operation = request.data.get('operation')
+    transaction_ids = request.data.get('transaction_ids', [])
+    parameters = request.data.get('parameters', {})
+    
+    if not operation or not transaction_ids:
+        return Response(
+            {'error': 'operation and transaction_ids are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        batch_service = BatchOperationsService(request.user.organization)
+        
+        if operation == 'categorize':
+            results = batch_service.batch_categorize(transaction_ids, parameters.get('account_id'))
+        elif operation == 'tag':
+            results = batch_service.batch_tag(transaction_ids, parameters.get('tags', []), parameters.get('action', 'add'))
+        elif operation == 'update':
+            results = batch_service.batch_update_fields(transaction_ids, parameters.get('field_updates', {}))
+        elif operation == 'delete':
+            results = batch_service.batch_delete(transaction_ids, parameters.get('soft_delete', True))
+        elif operation == 'approve':
+            results = batch_service.batch_approve(transaction_ids, request.user)
+        elif operation == 'apply_rule':
+            results = batch_service.batch_apply_rule(transaction_ids, parameters.get('rule_id'))
+        elif operation == 'recalculate':
+            results = batch_service.batch_recalculate_amounts(transaction_ids)
+        else:
+            return Response(
+                {'error': f'Unknown operation: {operation}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response(results)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Analytics endpoints
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def dashboard_kpis(request):
+    """
+    Get dashboard KPIs.
+    
+    Query params:
+    - start_date: Start date (YYYY-MM-DD)
+    - end_date: End date (YYYY-MM-DD)
+    """
+    from .services.analytics_service import AnalyticsService
+    from datetime import datetime
+    
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        analytics_service = AnalyticsService(request.user.organization)
+        kpis = analytics_service.get_dashboard_kpis(start, end)
+        
+        return Response(kpis)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def build_custom_report(request):
+    """
+    Build custom report with filters and aggregations.
+    
+    Body params:
+    - config: Report configuration dict
+    """
+    from .services.report_builder_service import ReportBuilderService
+    
+    config = request.data.get('config', {})
+    
+    try:
+        report_service = ReportBuilderService(request.user.organization)
+        report = report_service.build_custom_report(config)
+        
+        return Response(report)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def schedule_report(request):
+    """
+    Create scheduled report.
+    
+    Body params:
+    - report_type: Report type
+    - frequency: Schedule frequency (daily, weekly, monthly, quarterly)
+    - recipients: List of email addresses
+    - format: Report format (excel, csv, pdf)
+    - parameters: Report parameters
+    """
+    from .services.scheduled_reports_service import ScheduledReportsService
+    
+    report_type = request.data.get('report_type')
+    frequency = request.data.get('frequency')
+    recipients = request.data.get('recipients', [])
+    format = request.data.get('format', 'excel')
+    parameters = request.data.get('parameters', {})
+    
+    if not all([report_type, frequency, recipients]):
+        return Response(
+            {'error': 'report_type, frequency, and recipients are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        schedule_service = ScheduledReportsService(request.user.organization)
+        schedule = schedule_service.create_schedule(
+            report_type, frequency, recipients, format, parameters
+        )
+        
+        return Response(schedule)
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
