@@ -5,10 +5,17 @@ from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Integration, SyncLog, WebhookEvent, TaxConfiguration
+from .models import (
+    Integration, SyncLog, WebhookEvent, TaxConfiguration,
+    TransactionRule, BankReconciliation, ReconciliationMatch,
+    Currency, ExchangeRate, ForexGainLoss
+)
 from .serializers import (
     IntegrationSerializer, SyncLogSerializer,
-    WebhookEventSerializer, TaxConfigurationSerializer
+    WebhookEventSerializer, TaxConfigurationSerializer,
+    TransactionRuleSerializer, BankReconciliationSerializer,
+    ReconciliationMatchSerializer, CurrencySerializer,
+    ExchangeRateSerializer, ForexGainLossSerializer
 )
 
 
@@ -140,3 +147,301 @@ class TaxConfigurationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization)
+
+
+class TransactionRuleViewSet(viewsets.ModelViewSet):
+    serializer_class = TransactionRuleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['rule_type', 'action', 'is_active', 'auto_apply']
+    search_fields = ['name', 'description']
+    ordering_fields = ['priority', 'created_at', 'times_applied']
+    ordering = ['priority']
+
+    def get_queryset(self):
+        return TransactionRule.objects.filter(
+            organization=self.request.user.organization
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(
+            organization=self.request.user.organization,
+            created_by=self.request.user
+        )
+
+    @action(detail=True, methods=['post'])
+    def test_rule(self, request, pk=None):
+        """Test a rule against sample transactions."""
+        rule = self.get_object()
+        transaction_ids = request.data.get('transaction_ids', [])
+
+        from apps.transactions.models import Transaction
+        from .services import AutoCategorizationService
+
+        transactions = Transaction.objects.filter(
+            id__in=transaction_ids,
+            organization=self.request.user.organization
+        )
+
+        service = AutoCategorizationService(self.request.user.organization)
+        results = []
+
+        for txn in transactions:
+            if service._rule_matches(rule, txn):
+                results.append({
+                    'transaction_id': str(txn.id),
+                    'matches': True,
+                    'description': txn.description,
+                    'amount': str(txn.gross_amount)
+                })
+            else:
+                results.append({
+                    'transaction_id': str(txn.id),
+                    'matches': False
+                })
+
+        return Response({
+            'rule_id': str(rule.id),
+            'tested_transactions': len(results),
+            'matches': sum(1 for r in results if r['matches']),
+            'results': results
+        })
+
+    @action(detail=False, methods=['post'])
+    def apply_to_batch(self, request):
+        """Apply rules to a batch of transactions."""
+        transaction_ids = request.data.get('transaction_ids', [])
+
+        from apps.transactions.models import Transaction
+        from .services import AutoCategorizationService
+
+        transactions = Transaction.objects.filter(
+            id__in=transaction_ids,
+            organization=self.request.user.organization
+        )
+
+        service = AutoCategorizationService(self.request.user.organization)
+        result = service.categorize_batch(list(transactions))
+
+        return Response(result)
+
+
+class BankReconciliationViewSet(viewsets.ModelViewSet):
+    serializer_class = BankReconciliationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['status', 'bank_account']
+    ordering = ['-period_end']
+
+    def get_queryset(self):
+        return BankReconciliation.objects.filter(
+            organization=self.request.user.organization
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
+
+    @action(detail=True, methods=['post'])
+    def auto_match(self, request, pk=None):
+        """Run automatic matching for this reconciliation."""
+        reconciliation = self.get_object()
+        confidence_threshold = float(request.data.get('confidence_threshold', 80.0))
+
+        from .services import ReconciliationService
+
+        service = ReconciliationService(reconciliation)
+        result = service.auto_match(confidence_threshold=confidence_threshold)
+
+        return Response(result)
+
+    @action(detail=True, methods=['post'])
+    def manual_match(self, request, pk=None):
+        """Create a manual match."""
+        reconciliation = self.get_object()
+        bank_transaction_id = request.data.get('bank_transaction_id')
+        transaction_ids = request.data.get('transaction_ids', [])
+        notes = request.data.get('notes', '')
+
+        from .services import ReconciliationService
+
+        service = ReconciliationService(reconciliation)
+        match = service.manual_match(bank_transaction_id, transaction_ids, notes)
+
+        return Response(ReconciliationMatchSerializer(match).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Complete the reconciliation."""
+        reconciliation = self.get_object()
+
+        from .services import ReconciliationService
+
+        service = ReconciliationService(reconciliation)
+        success = service.complete_reconciliation(request.user)
+
+        return Response({
+            'success': success,
+            'status': reconciliation.status,
+            'reconciled_at': reconciliation.reconciled_at
+        })
+
+    @action(detail=True, methods=['get'])
+    def unmatched(self, request, pk=None):
+        """Get unmatched transactions for this reconciliation."""
+        reconciliation = self.get_object()
+
+        from .services import ReconciliationService
+
+        service = ReconciliationService(reconciliation)
+        unmatched = service.get_unmatched_transactions()
+
+        return Response(unmatched)
+
+
+class ReconciliationMatchViewSet(viewsets.ModelViewSet):
+    serializer_class = ReconciliationMatchSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['reconciliation', 'match_type', 'is_confirmed']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        return ReconciliationMatch.objects.filter(
+            reconciliation__organization=self.request.user.organization
+        )
+
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        """Confirm a suggested match."""
+        from django.utils import timezone
+        match = self.get_object()
+        match.is_confirmed = True
+        match.confirmed_by = request.user
+        match.confirmed_at = timezone.now()
+        match.save()
+
+        return Response(ReconciliationMatchSerializer(match).data)
+
+    @action(detail=True, methods=['delete'])
+    def unmatch(self, request, pk=None):
+        """Remove a match."""
+        match = self.get_object()
+        reconciliation = match.reconciliation
+
+        from .services import ReconciliationService
+
+        service = ReconciliationService(reconciliation)
+        success = service.unmatch(str(match.id))
+
+        return Response({'success': success}, status=status.HTTP_204_NO_CONTENT if success else status.HTTP_400_BAD_REQUEST)
+
+
+class CurrencyViewSet(viewsets.ModelViewSet):
+    serializer_class = CurrencySerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['code', 'name']
+    ordering = ['code']
+    queryset = Currency.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def load_common(self, request):
+        """Load common currencies."""
+        from .services import CurrencyService
+
+        service = CurrencyService(request.user.organization)
+        count = service.load_common_currencies()
+
+        return Response({'currencies_loaded': count})
+
+
+class ExchangeRateViewSet(viewsets.ModelViewSet):
+    serializer_class = ExchangeRateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['from_currency', 'to_currency', 'rate_date', 'source']
+    ordering = ['-rate_date']
+    queryset = ExchangeRate.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def convert(self, request):
+        """Convert an amount between currencies."""
+        from decimal import Decimal
+        from datetime import datetime
+        from django.utils import timezone
+        from .services import CurrencyService
+
+        amount = Decimal(str(request.data.get('amount')))
+        from_currency = request.data.get('from_currency')
+        to_currency = request.data.get('to_currency')
+        conversion_date = request.data.get('conversion_date')
+
+        if conversion_date:
+            conversion_date = datetime.fromisoformat(conversion_date).date()
+
+        service = CurrencyService(request.user.organization)
+        converted_amount = service.convert_amount(
+            amount, from_currency, to_currency, conversion_date
+        )
+
+        rate = service.get_exchange_rate(from_currency, to_currency, conversion_date or timezone.now().date())
+
+        return Response({
+            'amount': str(amount),
+            'from_currency': from_currency,
+            'to_currency': to_currency,
+            'converted_amount': str(converted_amount),
+            'exchange_rate': str(rate),
+            'conversion_date': (conversion_date or timezone.now().date()).isoformat()
+        })
+
+    @action(detail=False, methods=['post'])
+    def bulk_import(self, request):
+        """Bulk import exchange rates."""
+        from decimal import Decimal
+        from datetime import datetime
+        from .services import CurrencyService
+
+        rates = request.data.get('rates', [])
+        service = CurrencyService(request.user.organization)
+
+        imported = 0
+        for rate_data in rates:
+            service.save_exchange_rate(
+                from_currency=rate_data['from_currency'],
+                to_currency=rate_data['to_currency'],
+                rate=Decimal(str(rate_data['rate'])),
+                rate_date=datetime.fromisoformat(rate_data['rate_date']).date(),
+                source=rate_data.get('source', 'manual')
+            )
+            imported += 1
+
+        return Response({'imported': imported})
+
+
+class ForexGainLossViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ForexGainLossSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['gain_loss_type', 'from_currency', 'to_currency']
+    ordering = ['-calculation_date']
+
+    def get_queryset(self):
+        return ForexGainLoss.objects.filter(
+            organization=self.request.user.organization
+        )
+
+    @action(detail=False, methods=['post'])
+    def revalue(self, request):
+        """Revalue all open foreign currency transactions."""
+        from datetime import datetime
+        from .services import CurrencyService
+
+        revaluation_date = request.data.get('revaluation_date')
+        if revaluation_date:
+            revaluation_date = datetime.fromisoformat(revaluation_date).date()
+
+        service = CurrencyService(request.user.organization)
+        result = service.revalue_open_transactions(revaluation_date)
+
+        return Response(result)
