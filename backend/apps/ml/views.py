@@ -5,6 +5,7 @@ from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from apps.common.throttles import MLAnalysisRateThrottle
 from .models import AnomalyDetection, FinancialForecast
 from .serializers import AnomalyDetectionSerializer, FinancialForecastSerializer
 
@@ -12,6 +13,7 @@ from .serializers import AnomalyDetectionSerializer, FinancialForecastSerializer
 class AnomalyDetectionViewSet(viewsets.ModelViewSet):
     serializer_class = AnomalyDetectionSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [MLAnalysisRateThrottle]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['anomaly_type', 'severity', 'status']
     ordering = ['-detected_at']
@@ -41,6 +43,7 @@ class AnomalyDetectionViewSet(viewsets.ModelViewSet):
 class FinancialForecastViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = FinancialForecastSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [MLAnalysisRateThrottle]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['forecast_type', 'scenario_name']
     ordering = ['forecast_date']

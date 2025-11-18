@@ -18,7 +18,16 @@ urlpatterns = [
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
-    # API endpoints
+    # API v1 endpoints (versioned)
+    path('api/v1/accounts/', include('apps.accounts.urls')),
+    path('api/v1/transactions/', include('apps.transactions.urls')),
+    path('api/v1/inventory/', include('apps.inventory.urls')),
+    path('api/v1/integrations/', include('apps.integrations.urls')),
+    path('api/v1/reporting/', include('apps.reporting.urls')),
+    path('api/v1/revenue/', include('apps.revenue_recognition.urls')),
+    path('api/v1/ml/', include('apps.ml.urls')),
+
+    # Backwards compatibility (redirect to v1 for now)
     path('api/accounts/', include('apps.accounts.urls')),
     path('api/transactions/', include('apps.transactions.urls')),
     path('api/inventory/', include('apps.inventory.urls')),

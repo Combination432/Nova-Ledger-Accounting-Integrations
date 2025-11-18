@@ -5,6 +5,7 @@ from rest_framework import viewsets, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from apps.common.permissions import IsOwnerOnly, IsOwnerOrAdmin, BelongsToOrganization
 from .models import Organization, ChartOfAccounts, SalesChannel
 from .serializers import (
     OrganizationSerializer,
@@ -22,7 +23,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
     ViewSet for managing organizations.
     """
     serializer_class = OrganizationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOnly, BelongsToOrganization]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'tax_id']
     ordering_fields = ['name', 'created_at']
@@ -48,7 +49,7 @@ class ChartOfAccountsViewSet(viewsets.ModelViewSet):
     ViewSet for managing chart of accounts.
     """
     serializer_class = ChartOfAccountsSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin, BelongsToOrganization]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['account_type', 'account_subtype', 'is_active', 'is_sub_account']
     search_fields = ['account_number', 'account_name', 'description']
@@ -92,7 +93,7 @@ class SalesChannelViewSet(viewsets.ModelViewSet):
     ViewSet for managing sales channels.
     """
     serializer_class = SalesChannelSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin, BelongsToOrganization]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['channel_type', 'is_active']
     search_fields = ['name']

@@ -2,10 +2,11 @@
 API views for reporting app.
 """
 from rest_framework import viewsets, permissions, filters, status
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, throttle_classes
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, Count, Avg
+from apps.common.throttles import ReportingRateThrottle
 from .models import ChannelProfitability, ProductProfitability, DashboardMetric
 from .serializers import (
     ChannelProfitabilitySerializer, ProductProfitabilitySerializer,
@@ -14,6 +15,7 @@ from .serializers import (
 
 
 @api_view(['GET'])
+@throttle_classes([ReportingRateThrottle])
 def dashboard_metrics(request):
     """Get comprehensive dashboard metrics."""
     from datetime import datetime, timedelta
@@ -63,6 +65,7 @@ def dashboard_metrics(request):
 class ChannelProfitabilityViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ChannelProfitabilitySerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ReportingRateThrottle]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['sales_channel', 'period_type']
     ordering = ['-period_start']
@@ -76,6 +79,7 @@ class ChannelProfitabilityViewSet(viewsets.ReadOnlyModelViewSet):
 class ProductProfitabilityViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ProductProfitabilitySerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ReportingRateThrottle]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['inventory_item', 'sales_channel', 'period_type']
     ordering = ['-period_start']
@@ -89,6 +93,7 @@ class ProductProfitabilityViewSet(viewsets.ReadOnlyModelViewSet):
 class DashboardMetricViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DashboardMetricSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ReportingRateThrottle]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['metric_category', 'metric_name', 'period_type']
     ordering = ['-period_date']
