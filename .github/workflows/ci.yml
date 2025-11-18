@@ -24,17 +24,115 @@ jobs:
         ports:
           - 5432:5432
 
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    env:
+      DB_NAME: nova_ledger_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: localhost
+      DB_PORT: 5432
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SECRET_KEY: test-secret-key-for-ci-pipeline-only-not-for-production
+      DEBUG: 'False'
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+
     steps:
     - uses: actions/checkout@v3
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
+        cache: 'pip'
+
     - name: Install dependencies
       run: |
         cd backend
         pip install -r requirements.txt
+
+    - name: Run migrations
+      run: |
+        cd backend
+        python manage.py migrate --noinput
+
     - name: Run tests
       run: |
         cd backend
-        pytest --cov=apps
+        pytest --cov=apps --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        file: ./backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  test-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+
+    - name: Run linter
+      run: |
+        cd frontend
+        npm run lint
+
+    - name: Build frontend
+      run: |
+        cd frontend
+        npm run build
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install linting tools
+      run: |
+        pip install flake8 black isort
+
+    - name: Run flake8
+      run: |
+        cd backend
+        flake8 apps/ --max-line-length=120 --extend-ignore=E203,W503 || true
+
+    - name: Check black formatting
+      run: |
+        cd backend
+        black --check apps/ || true
+
+    - name: Check import sorting
+      run: |
+        cd backend
+        isort --check-only apps/ || true

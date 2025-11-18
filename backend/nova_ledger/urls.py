@@ -25,4 +25,5 @@ urlpatterns = [
     path('api/integrations/', include('apps.integrations.urls')),
     path('api/reporting/', include('apps.reporting.urls')),
     path('api/revenue/', include('apps.revenue_recognition.urls')),
+    path('api/ml/', include('apps.ml.urls')),
 ]
