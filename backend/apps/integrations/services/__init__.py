@@ -9,6 +9,7 @@ from .categorization_service import AutoCategorizationService
 from .reconciliation_service import ReconciliationService
 from .currency_service import CurrencyService
 from .export_service import ExportService
+from .oauth_service import OAuthService
 
 __all__ = [
     'ShopifyIntegrationService',
@@ -19,4 +20,5 @@ __all__ = [
     'ReconciliationService',
     'CurrencyService',
     'ExportService',
+    'OAuthService',
 ]

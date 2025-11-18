@@ -7,7 +7,8 @@ from .views import (
     ReconciliationMatchViewSet, CurrencyViewSet,
     ExchangeRateViewSet, ForexGainLossViewSet,
     export_transactions, export_reconciliation_report,
-    export_tax_report, export_forex_report, tax_summary
+    export_tax_report, export_forex_report, tax_summary,
+    oauth_initiate, oauth_callback, oauth_disconnect, oauth_refresh
 )
 
 router = DefaultRouter()
@@ -29,4 +30,8 @@ urlpatterns = [
     path('export/tax/', export_tax_report, name='export-tax'),
     path('export/forex/', export_forex_report, name='export-forex'),
     path('tax/summary/', tax_summary, name='tax-summary'),
+    path('oauth/initiate/', oauth_initiate, name='oauth-initiate'),
+    path('oauth/callback/', oauth_callback, name='oauth-callback'),
+    path('oauth/disconnect/', oauth_disconnect, name='oauth-disconnect'),
+    path('oauth/refresh/', oauth_refresh, name='oauth-refresh'),
 ]

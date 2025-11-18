@@ -661,3 +661,315 @@ def tax_summary(request):
         'tax_jurisdictions': summary,
         'total_tax_collected': sum(item['tax_collected'] for item in summary)
     })
+
+
+# OAuth endpoints
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def oauth_initiate(request):
+    """
+    Initiate OAuth authorization flow.
+    
+    Query params:
+    - platform: Integration platform (shopify, stripe, quickbooks)
+    - shop: Shopify shop name (required for Shopify)
+    - integration_id: Optional existing integration ID to update
+    
+    Returns redirect URL for user to authorize
+    """
+    from .services.oauth_service import OAuthService
+    from django.contrib.sites.shortcuts import get_current_site
+    
+    platform = request.GET.get('platform')
+    shop = request.GET.get('shop')
+    integration_id = request.GET.get('integration_id')
+    
+    if not platform:
+        return Response(
+            {'error': 'platform parameter is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        oauth_service = OAuthService(platform, request.user.organization)
+        
+        # Build redirect URI
+        current_site = get_current_site(request)
+        protocol = 'https' if request.is_secure() else 'http'
+        redirect_uri = f"{protocol}://{current_site.domain}/api/integrations/oauth/callback/"
+        
+        # Generate authorization URL
+        auth_url, state, code_verifier = oauth_service.generate_authorization_url(
+            redirect_uri=redirect_uri,
+            shop=shop
+        )
+        
+        # Store state and code_verifier in session for validation
+        request.session[f'oauth_state_{platform}'] = state
+        request.session[f'oauth_platform'] = platform
+        
+        if integration_id:
+            request.session[f'oauth_integration_id'] = integration_id
+        
+        if code_verifier:
+            request.session[f'oauth_code_verifier_{platform}'] = code_verifier
+        
+        if shop:
+            request.session[f'oauth_shop_{platform}'] = shop
+        
+        return Response({
+            'authorization_url': auth_url,
+            'state': state,
+            'platform': platform
+        })
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def oauth_callback(request):
+    """
+    OAuth callback endpoint.
+    
+    Query params:
+    - code: Authorization code from OAuth provider
+    - state: CSRF protection state token
+    - shop: Shopify shop name (for Shopify)
+    - realmId: QuickBooks company ID (for QuickBooks)
+    
+    Creates or updates integration with OAuth tokens
+    """
+    from .services.oauth_service import OAuthService
+    from django.contrib.sites.shortcuts import get_current_site
+    from datetime import timedelta
+    
+    code = request.GET.get('code')
+    state = request.GET.get('state')
+    shop = request.GET.get('shop')
+    realm_id = request.GET.get('realmId')  # QuickBooks
+    error = request.GET.get('error')
+    
+    # Check for OAuth errors
+    if error:
+        error_description = request.GET.get('error_description', 'Unknown error')
+        return Response(
+            {'error': error, 'description': error_description},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not code or not state:
+        return Response(
+            {'error': 'Missing code or state parameter'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get platform from session
+    platform = request.session.get('oauth_platform')
+    if not platform:
+        return Response(
+            {'error': 'OAuth session expired or invalid'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validate state (CSRF protection)
+    stored_state = request.session.get(f'oauth_state_{platform}')
+    if not stored_state or stored_state != state:
+        return Response(
+            {'error': 'Invalid state parameter - possible CSRF attack'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        oauth_service = OAuthService(platform, request.user.organization)
+        
+        # Get stored values from session
+        code_verifier = request.session.get(f'oauth_code_verifier_{platform}')
+        stored_shop = request.session.get(f'oauth_shop_{platform}')
+        integration_id = request.session.get('oauth_integration_id')
+        
+        # Use shop from callback or session
+        shop = shop or stored_shop
+        
+        # Build redirect URI
+        current_site = get_current_site(request)
+        protocol = 'https' if request.is_secure() else 'http'
+        redirect_uri = f"{protocol}://{current_site.domain}/api/integrations/oauth/callback/"
+        
+        # Exchange code for token
+        token_data = oauth_service.exchange_code_for_token(
+            code=code,
+            redirect_uri=redirect_uri,
+            shop=shop,
+            code_verifier=code_verifier,
+            realm_id=realm_id
+        )
+        
+        # Create or update integration
+        if integration_id:
+            integration = Integration.objects.get(
+                id=integration_id,
+                organization=request.user.organization
+            )
+        else:
+            # Create new integration
+            integration = Integration.objects.create(
+                organization=request.user.organization,
+                integration_type=platform,
+                name=f"{platform.title()} Integration",
+                is_active=True
+            )
+        
+        # Store OAuth tokens
+        integration.oauth_access_token = token_data['access_token']
+        integration.oauth_refresh_token = token_data.get('refresh_token', '')
+        
+        if token_data.get('expires_in'):
+            integration.oauth_token_expiry = timezone.now() + timedelta(seconds=token_data['expires_in'])
+        
+        # Store platform-specific data
+        credentials = integration.auth_credentials or {}
+        
+        if platform == 'shopify' and shop:
+            credentials['shop'] = shop
+            integration.name = f"Shopify - {shop}"
+        elif platform == 'stripe':
+            credentials['stripe_user_id'] = token_data.get('stripe_user_id')
+            credentials['stripe_publishable_key'] = token_data.get('stripe_publishable_key')
+        elif platform == 'quickbooks' and realm_id:
+            credentials['realm_id'] = realm_id
+        
+        integration.auth_credentials = credentials
+        integration.is_connected = True
+        integration.connection_status = 'connected'
+        integration.last_successful_sync = timezone.now()
+        
+        integration.save()
+        
+        # Clean up session
+        request.session.pop(f'oauth_state_{platform}', None)
+        request.session.pop(f'oauth_code_verifier_{platform}', None)
+        request.session.pop(f'oauth_shop_{platform}', None)
+        request.session.pop('oauth_platform', None)
+        request.session.pop('oauth_integration_id', None)
+        
+        return Response({
+            'success': True,
+            'integration_id': str(integration.id),
+            'platform': platform,
+            'message': f'Successfully connected {platform.title()} integration'
+        })
+        
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'OAuth callback failed: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def oauth_disconnect(request):
+    """
+    Disconnect and revoke OAuth integration.
+    
+    Body params:
+    - integration_id: Integration ID to disconnect
+    """
+    from .services.oauth_service import OAuthService
+    
+    integration_id = request.data.get('integration_id')
+    
+    if not integration_id:
+        return Response(
+            {'error': 'integration_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        integration = Integration.objects.get(
+            id=integration_id,
+            organization=request.user.organization
+        )
+        
+        oauth_service = OAuthService(integration.integration_type, request.user.organization)
+        success = oauth_service.revoke_token(integration)
+        
+        if success:
+            return Response({
+                'success': True,
+                'message': f'{integration.integration_type.title()} integration disconnected successfully'
+            })
+        else:
+            return Response(
+                {'error': 'Failed to revoke token'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'Disconnect failed: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def oauth_refresh(request):
+    """
+    Manually refresh OAuth token.
+    
+    Body params:
+    - integration_id: Integration ID to refresh
+    """
+    from .services.oauth_service import OAuthService
+    
+    integration_id = request.data.get('integration_id')
+    
+    if not integration_id:
+        return Response(
+            {'error': 'integration_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        integration = Integration.objects.get(
+            id=integration_id,
+            organization=request.user.organization
+        )
+        
+        oauth_service = OAuthService(integration.integration_type, request.user.organization)
+        token_data = oauth_service.refresh_access_token(integration)
+        
+        return Response({
+            'success': True,
+            'message': 'Token refreshed successfully',
+            'expires_in': token_data.get('expires_in'),
+            'token_expiry': integration.oauth_token_expiry.isoformat() if integration.oauth_token_expiry else None
+        })
+        
+    except Integration.DoesNotExist:
+        return Response(
+            {'error': 'Integration not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': f'Token refresh failed: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
